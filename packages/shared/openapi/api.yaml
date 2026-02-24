@@ -1,0 +1,197 @@
+openapi: 3.0.3
+info:
+  title: Vibent API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: ok
+  /v1/runs:
+    post:
+      summary: Create run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [goal]
+              properties:
+                goal:
+                  type: string
+                baseRef:
+                  type: string
+      responses:
+        '201':
+          description: Created
+    get:
+      summary: List runs
+      responses:
+        '200':
+          description: List of runs
+  /v1/runs/{runId}:
+    get:
+      summary: Get run
+      parameters:
+        - in: path
+          name: runId
+          schema:
+            type: string
+          required: true
+      responses:
+        '200':
+          description: Run detail
+        '404':
+          description: Not found
+  /v1/sessions:
+    get:
+      summary: List sessions
+      responses:
+        '200':
+          description: List of sessions
+  /v1/sessions/{sessionId}:
+    get:
+      summary: Get session detail
+      parameters:
+        - in: path
+          name: sessionId
+          schema:
+            type: string
+          required: true
+      responses:
+        '200':
+          description: Session detail
+        '404':
+          description: Not found
+  /v1/session/start:
+    post:
+      summary: Start a session
+      responses:
+        '200':
+          description: Session started
+  /v1/session/continue:
+    post:
+      summary: Continue a session
+      responses:
+        '200':
+          description: Session continued
+  /v1/session/status:
+    get:
+      summary: Active session status
+      responses:
+        '200':
+          description: Session summary
+  /v1/session/note:
+    post:
+      summary: Add a session note
+      responses:
+        '200':
+          description: Note stored
+  /v1/session/pin:
+    post:
+      summary: Pin or unpin a session
+      responses:
+        '200':
+          description: Session updated
+  /v1/memory/query:
+    post:
+      summary: Query session memory
+      responses:
+        '200':
+          description: Relevant highlights and runs
+  /v1/memory/snapshot:
+    get:
+      summary: Latest session snapshot
+      responses:
+        '200':
+          description: Snapshot
+  /v1/resume/plan:
+    post:
+      summary: Generate resume plan
+      responses:
+        '200':
+          description: Resume plan
+  /v1/evals/plan:
+    post:
+      summary: Create verification plan
+      responses:
+        '200':
+          description: Eval plan
+  /v1/review/run:
+    post:
+      summary: Execute automated review/security checks for a run
+      responses:
+        '200':
+          description: Review result
+  /v1/reviews/{runId}:
+    get:
+      summary: List review results for a run
+      parameters:
+        - in: path
+          name: runId
+          schema:
+            type: string
+          required: true
+      responses:
+        '200':
+          description: Review results
+  /v1/releases:
+    post:
+      summary: Create release from a run
+      responses:
+        '201':
+          description: Release created
+    get:
+      summary: List releases
+      responses:
+        '200':
+          description: Release list
+  /v1/releases/promote:
+    post:
+      summary: Promote release traffic
+      responses:
+        '200':
+          description: Release promoted
+  /v1/releases/rollback:
+    post:
+      summary: Roll back a release
+      responses:
+        '200':
+          description: Release rolled back
+  /v1/signals:
+    post:
+      summary: Ingest a production signal
+      responses:
+        '201':
+          description: Signal accepted
+  /v1/signals/session/{sessionId}:
+    get:
+      summary: List production signals for a session
+      parameters:
+        - in: path
+          name: sessionId
+          schema:
+            type: string
+          required: true
+      responses:
+        '200':
+          description: Signals list
+  /v1/publish:
+    post:
+      summary: Publish evidence (`pr` or `direct` mode)
+      responses:
+        '200':
+          description: Published
+        '400':
+          description: Publishing requires GitHub connection.
+  /v1/webhooks/github:
+    post:
+      summary: Handle GitHub webhooks
+      responses:
+        '200':
+          description: Accepted

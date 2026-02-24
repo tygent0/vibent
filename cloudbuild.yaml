@@ -1,0 +1,12 @@
+steps:
+  - name: node:22
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        npm i -g pnpm
+        pnpm install --frozen-lockfile=false
+        pnpm lint
+        pnpm test
+        pnpm build
+images: []

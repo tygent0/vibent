@@ -1,0 +1,189 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+:root {
+  --bg: #f6f4ef;
+  --bg-alt: #ece8df;
+  --ink: #121212;
+  --muted: #5e5a52;
+  --accent: #0a7c6c;
+  --accent-2: #c8572c;
+  --card: #fffef9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Space Grotesk", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 15% 10%, rgba(10, 124, 108, 0.15), transparent 35%),
+    radial-gradient(circle at 85% 20%, rgba(200, 87, 44, 0.18), transparent 35%),
+    linear-gradient(180deg, var(--bg) 0%, var(--bg-alt) 100%);
+  min-height: 100vh;
+}
+
+main {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+}
+
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+
+nav a {
+  color: var(--ink);
+  text-decoration: none;
+  padding: 8px 12px;
+  border: 1px solid rgba(18, 18, 18, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid rgba(18, 18, 18, 0.12);
+  border-radius: 14px;
+  padding: 18px;
+  margin-bottom: 14px;
+  box-shadow: 0 10px 30px rgba(18, 18, 18, 0.06);
+}
+
+h1 {
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  line-height: 1.02;
+  margin: 0 0 12px;
+}
+
+h2 {
+  margin: 0 0 10px;
+}
+
+.mono,
+code,
+pre {
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.status {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 0.75rem;
+  border: 1px solid rgba(18, 18, 18, 0.2);
+}
+
+.grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+button,
+input {
+  font-family: inherit;
+  font-size: 1rem;
+}
+
+button {
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+input {
+  border: 1px solid rgba(18, 18, 18, 0.25);
+  border-radius: 10px;
+  padding: 10px;
+  width: 100%;
+}
+
+.hero {
+  padding: 20px 0 10px;
+  animation: rise 0.45s ease-out;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.markdown {
+  line-height: 1.6;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  margin-top: 1.2em;
+  margin-bottom: 0.5em;
+}
+
+.markdown p {
+  margin: 0.75em 0;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 0.75em 0 0.75em 1.2em;
+  padding: 0;
+}
+
+.markdown li {
+  margin: 0.25em 0;
+}
+
+.markdown code {
+  background: rgba(18, 18, 18, 0.08);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
+}
+
+.markdown pre {
+  overflow-x: auto;
+  padding: 12px;
+  border-radius: 10px;
+  background: rgba(18, 18, 18, 0.92);
+  color: #f6f4ef;
+}
+
+.markdown pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.markdown blockquote {
+  margin: 0.9em 0;
+  padding: 0.35em 0.9em;
+  border-left: 4px solid var(--accent);
+  background: rgba(10, 124, 108, 0.08);
+}
+
+.markdown a {
+  color: var(--accent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+}
+
+.markdown hr {
+  border: 0;
+  border-top: 1px solid rgba(18, 18, 18, 0.15);
+  margin: 1.25em 0;
+}

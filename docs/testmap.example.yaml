@@ -1,0 +1,11 @@
+mappings:
+  - glob: "apps/web/**/*.ts*"
+    commands:
+      - "pnpm --filter @vibent/web lint"
+      - "pnpm --filter @vibent/web test"
+  - glob: "apps/api/**/*.ts"
+    commands:
+      - "pnpm --filter @vibent/api test"
+  - glob: "infra/**/*.tf"
+    commands:
+      - "terraform -chdir=infra/terraform fmt -check"

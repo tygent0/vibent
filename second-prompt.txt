@@ -1,0 +1,181 @@
+UPDATE: Add “Context Drift” (Session Memory) on top of the existing vibent prompt.
+
+Goal:
+Extend vibent beyond PR evidence into a structured, developer-friendly session memory layer that helps humans and coding agents resume work across days/weeks without re-explaining the repo. Keep it low-ceremony and developer-joy first: no “enterprise dashboards”, no heavy vocabulary in UX. The default experience should feel like “git + x-ray vision + memory”.
+
+Non-negotiable UX constraints:
+- Context memory must be largely automatic: inferred from what the developer/agent did during a run.
+- Don’t require users to manually write “intent forms” or tag everything.
+- The UI should present memory as “Highlights + Receipts”, not raw logs.
+- Store only summaries by default; full transcripts are optional artifacts with retention.
+- Make it easy to resume: “Continue this run/task” should be one click/one command.
+
+New concepts (internal; keep user-facing labels simple):
+Add these objects to the system (names can remain internal, but user-facing text should say “Session”, “Highlights”, “Notes”, “Resume”):
+
+1) Session
+- session_id
+- repo_id (connected repo)
+- started_at, last_active_at
+- created_by (user_id or agent_id)
+- optional branch/ref association
+- title (auto: from first run goal; user can rename)
+- status (active, archived)
+- pinned (bool)
+- summary (short)
+- linked_runs (list)
+
+2) SessionEvent (append-only event stream)
+Record structured events during a session/run:
+- event_id, session_id, run_id (optional)
+- ts
+- type: prompt, file_read, file_write, search, command, test_run, build, error, decision, note, link
+- payload (small, structured; large data stored as artifact pointer)
+Examples:
+- file_read: {path, hash}
+- command: {cmd, exit_code, stdout_hash, stderr_hash}
+- test_run: {suite, result, duration_ms}
+- decision: {text, rationale_short}
+- note: {text}
+
+3) Highlight
+Auto-generated “what matters” for humans and agents:
+- highlight_id, session_id
+- type: goal, constraint, finding, failure, fix, regression, performance_delta, next_step, open_question
+- text (short)
+- pointers: run_id, file paths, eval_ids, artifact links
+- confidence (optional)
+Highlights are produced after each run/verify, and can be edited/approved by humans.
+
+4) MemorySnapshot (cheap, structured, queryable)
+Periodic compact snapshots to reduce rehydration cost:
+- snapshot_id, session_id
+- touched_files (top N)
+- touched_symbols (optional)
+- key_decisions (list)
+- known_failures (list with links)
+- last_known_good (run_id/bundle_id)
+- environment_fingerprint (env hash)
+- test_status_summary
+This is not a full repo embedding. It’s structured “state of work”.
+
+5) ResumePlan
+A structured “what to do next” object:
+- resume_id, session_id
+- tasks (ordered list)
+- suggested_commands (vibent verify/replay steps)
+- risks/unknowns
+Agents can consume this directly; humans see it as “Next steps”.
+
+New user-facing features (must implement):
+A) CLI: session lifecycle
+- vibent session start [--title "..."] [--from <branch|pr|run_id>]
+- vibent session status (show active session summary + next steps)
+- vibent session list (recent sessions, searchable)
+- vibent session show <session_id> (highlights, runs, next steps)
+- vibent session note "..." (adds a human note; minimal friction)
+- vibent session continue [<session_id>] (sets active session; suggests next steps)
+- vibent session archive <session_id>
+Rules:
+- vibent run automatically attaches to the active session (or creates a new session if none).
+- Session memory works locally-first and syncs when authenticated.
+
+B) CLI: context-aware “run” and “replay”
+- vibent run "..." should:
+  - attach to active session
+  - record file reads/writes (where possible) and commands invoked by vibent
+  - produce/update Highlights and MemorySnapshot
+- vibent replay <run_id> should:
+  - optionally restore session context: “replay with session state”
+  - after replay, update session highlights
+
+C) Web app: minimal “Sessions” view
+Add to the web app:
+- Sessions list for a repo/workspace (title, last active, status)
+- Session detail:
+  - Highlights (top 10)
+  - Timeline of runs with statuses (Draft/Verified/Published)
+  - “Resume” panel: next steps + reproduce commands
+  - Notes (human-added)
+Keep it sparse. No enterprise language.
+
+D) Agent skills: context memory endpoints
+Extend the local agent daemon (and optionally hosted API) with:
+- POST /v1/session/start
+- POST /v1/session/continue
+- GET  /v1/session/status
+- POST /v1/session/note
+- POST /v1/memory/query
+- GET  /v1/memory/snapshot
+- POST /v1/resume/plan
+Requirements:
+- /v1/memory/query must return:
+  - top highlights
+  - relevant prior runs
+  - relevant failures and fixes
+  - suggested next steps
+No embeddings required in v1; implement hybrid search:
+  - keyword search over notes/highlights
+  - match by file paths and symbols touched
+  - recency weighting
+
+E) “Context Drift” protections (the product behavior)
+Implement lightweight guardrails (developer-friendly messaging):
+- When a new run is similar to a previous failed attempt (same files/tests failing), surface:
+  “Heads up: similar change failed in Run X because <short reason>. See: vibent run show X”
+- When a user/agent tries to rerun an already-verified patch in same env, reuse cached Eval results where safe.
+- Always show “What changed since last known good run” in the session detail.
+
+Storage and retention for session memory:
+- Store session summaries, highlights, snapshots in Postgres (small).
+- Store full event logs as:
+  - small structured rows for core events
+  - large payloads (full stdout/stderr, long transcripts) as artifacts in GCS with pointers.
+- Default retention:
+  - Highlights/snapshots: keep indefinitely (small)
+  - Full event logs: 30 days (configurable)
+  - Artifacts: same as existing artifact retention (14 days default; longer for published bundles)
+- Provide a “Pin session” feature to extend retention.
+
+Privacy:
+- Redact secrets in command outputs and stored artifacts using the existing redaction pipeline.
+- Do not capture arbitrary developer shell commands unless invoked through vibent; never keylog.
+- Provide a clear setting: “Record extended session logs (recommended off by default for v1)”.
+
+Implementation requirements:
+- Update the shared schemas/types for Session, SessionEvent, Highlight, MemorySnapshot, ResumePlan.
+- Update the API to support session CRUD and memory query endpoints.
+- Update the CLI to manage active session state in .vibent/ plus sync to server when logged in.
+- Update the worker to optionally generate highlights after verification jobs and attach to sessions.
+- Add tests:
+  - session creation and linking runs
+  - highlight generation rules
+  - memory query ranking (recency + file overlap + keyword)
+  - retention cleanup for session events/artifacts
+
+Highlight generation (v1 heuristic, no LLM required):
+After each verify/publish:
+- If tests fail: create highlight type=failure with failing suite names + top error line (redacted)
+- If tests pass: create highlight type=fix with “Verified: <suite> passed”
+- If performance metrics exist: highlight performance_delta
+- Always create highlight next_step:
+  - If failures: suggest next likely action (rerun with expanded suite, inspect file)
+  - If pass: suggest publish/review
+Keep it deterministic, fast, and low-cost.
+
+UI copy requirements:
+- Use friendly labels: “Session”, “Highlights”, “Notes”, “Resume”
+- Avoid words: governance, policy, gate, compliance, risk tier, enforcement
+- Use plain explanations: “Similar change failed last time”, “Tests affected”, “Resume where you left off”
+
+Now implement these Context Drift features on top of the existing vibent monorepo prompt:
+- Add/modify all necessary code, migrations, endpoints, CLI commands, UI pages, and tests.
+- Ensure the end-to-end flow works locally:
+  1) vibent session start
+  2) vibent run + verify
+  3) vibent session status shows highlights and next steps
+  4) vibent session continue resumes in a new shell
+  5) memory query returns relevant prior runs and failures
+- Ensure the hosted flow works when GitHub is configured:
+  - sessions and highlights are visible in the web UI
+  - published bundles still post Evidence to GitHub as before

@@ -1,0 +1,12 @@
+node_modules
+.turbo
+.next
+dist
+coverage
+*.tsbuildinfo
+.env
+.env.*
+.vibent
+artifacts
+data
+.DS_Store

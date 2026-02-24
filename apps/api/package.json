@@ -1,0 +1,31 @@
+{
+  "name": "@vibent/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "lint": "eslint src test --ext .ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "db:migrate": "bash scripts/migrate.sh",
+    "seed": "bash scripts/seed.sh"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "@vibent/shared": "workspace:*",
+    "fast-glob": "^3.3.3",
+    "fastify": "^5.2.1",
+    "pino": "^9.5.0",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "vitest": "^2.1.8"
+  }
+}

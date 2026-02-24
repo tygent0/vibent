@@ -1,0 +1,25 @@
+{
+  "name": "vibent",
+  "private": true,
+  "version": "0.1.0",
+  "description": "vibent monorepo",
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "bootstrap": "bash scripts/bootstrap.sh",
+    "dev": "pnpm --filter @vibent/shared build && turbo run dev --parallel",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "format": "turbo run format",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.2",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
+    "typescript-eslint": "^8.18.2",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  }
+}

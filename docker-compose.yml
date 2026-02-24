@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vibent
+      POSTGRES_PASSWORD: vibent
+      POSTGRES_DB: vibent
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vibent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file: .env
+    ports:
+      - "${API_PORT:-8080}:${API_PORT:-8080}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    env_file: .env
+    ports:
+      - "${WORKER_PORT:-8090}:${WORKER_PORT:-8090}"
+    depends_on:
+      api:
+        condition: service_started
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    env_file: .env
+    environment:
+      VIBENT_API_URL: "http://api:${API_PORT:-8080}"
+    ports:
+      - "${WEB_PORT:-3000}:${WEB_PORT:-3000}"
+    depends_on:
+      api:
+        condition: service_started
+
+volumes:
+  pgdata:

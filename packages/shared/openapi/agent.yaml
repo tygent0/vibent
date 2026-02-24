@@ -1,0 +1,139 @@
+openapi: 3.0.3
+info:
+  title: Vibent Agent Daemon
+  version: 0.1.0
+servers:
+  - url: http://127.0.0.1:7777
+paths:
+  /v1/status:
+    get:
+      summary: Current daemon capabilities and auth state
+      responses:
+        '200':
+          description: OK
+  /v1/session/start:
+    post:
+      summary: Start a local session
+      responses:
+        '200':
+          description: Started
+  /v1/session/continue:
+    post:
+      summary: Continue a local session
+      responses:
+        '200':
+          description: Continued
+  /v1/session/status:
+    get:
+      summary: Active session summary
+      responses:
+        '200':
+          description: Session status
+  /v1/session/note:
+    post:
+      summary: Add note to active session
+      responses:
+        '200':
+          description: Note saved
+  /v1/session/pin:
+    post:
+      summary: Pin or unpin a local session
+      responses:
+        '200':
+          description: Session updated
+  /v1/memory/query:
+    post:
+      summary: Query local memory graph
+      responses:
+        '200':
+          description: Memory search result
+  /v1/memory/snapshot:
+    get:
+      summary: Fetch latest memory snapshot
+      responses:
+        '200':
+          description: Snapshot
+  /v1/resume/plan:
+    post:
+      summary: Build resume plan
+      responses:
+        '200':
+          description: Resume plan
+  /v1/run/create:
+    post:
+      summary: Create a run
+      requestBody:
+        required: true
+      responses:
+        '201':
+          description: Created
+  /v1/patch/propose:
+    post:
+      summary: Attach proposed patch to run
+      responses:
+        '200':
+          description: Stored
+        '400':
+          description: This patch edits files outside the requested scope.
+  /v1/eval/plan:
+    post:
+      summary: Suggest test commands
+      responses:
+        '200':
+          description: Plan generated
+  /v1/eval/run:
+    post:
+      summary: Execute an eval plan
+      responses:
+        '200':
+          description: Eval completed
+  /v1/review/run:
+    post:
+      summary: Execute automated review and security checks
+      responses:
+        '200':
+          description: Review completed
+  /v1/release/create:
+    post:
+      summary: Create release from a run
+      responses:
+        '200':
+          description: Release created
+  /v1/release/promote:
+    post:
+      summary: Promote release traffic
+      responses:
+        '200':
+          description: Release promoted
+  /v1/release/rollback:
+    post:
+      summary: Roll back a release
+      responses:
+        '200':
+          description: Release rolled back
+  /v1/release/list:
+    get:
+      summary: List local releases
+      responses:
+        '200':
+          description: Release list
+  /v1/signals/ingest:
+    post:
+      summary: Ingest production monitoring signals
+      responses:
+        '201':
+          description: Signal captured
+  /v1/bundle/summarize:
+    post:
+      summary: Summarize run evidence
+      responses:
+        '200':
+          description: Summary generated
+  /v1/publish:
+    post:
+      summary: Publish evidence (`pr` or `direct` mode)
+      responses:
+        '200':
+          description: Published
+        '400':
+          description: Publishing requires GitHub connection.

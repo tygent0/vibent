@@ -1,0 +1,188 @@
+Generate a complete, production-ready monorepo for a product called “vibent”.
+
+Product vibe (non-negotiable):
+vibent is “developer joy first”: it must feel like git + x-ray vision for AI-assisted coding. It is NOT an enterprise governance portal. It must be usable in < 10 minutes with minimal setup, and provide immediate value with a tiny command surface:
+- vibent run
+- vibent verify
+- vibent publish
+- vibent blame
+- vibent replay
+
+Core promise:
+Every AI-assisted change comes with proof: what changed, what tests ran, what passed/failed, and how to reproduce. Keep the UX plain-English and low-ceremony. Under the hood, build structure that can scale to enterprise later without changing the day-to-day developer experience.
+
+Deliverables:
+1) Web app (marketing + sign-in + connect GitHub + minimal dashboard)
+2) Backend API (REST) + webhook handler
+3) GitHub integration (GitHub App recommended; OAuth for login)
+4) Worker system for verification and publishing checks/comments
+5) Storage for run metadata and artifacts
+6) CLI “vibent” that wraps git workflows and can run local-first
+7) “Agent skills” mode: a local daemon interface so coding agents can call vibent with structured requests
+8) GCP deployment: Terraform + Cloud Run + Cloud SQL + Pub/Sub + Cloud Storage + Secret Manager + Cloud Build
+9) Local dev: docker-compose
+10) Tests, linting, formatting, docs, and a one-command bootstrap
+
+Key product constraints (developer-joy rules):
+- No forced “intent forms”, “policy dashboards”, or “approval workflows” in the default UX.
+- Do not expose internal concepts like “gate decisions”, “policy versions”, “governance”, “risk tiers” in the user-facing UI.
+- In the default experience, vibent should only surface friction at publish time (PR/update) and only in plain language.
+- Local-first: runs can be created and stored locally without any account. Account/GitHub connection is only required for publishing to GitHub or team sync.
+- Minimal noise on GitHub: publish exactly:
+  - A GitHub Check named “Vibent Evidence” (update in place)
+  - A single rolling PR comment (update in place) with the evidence summary
+- Data minimization: store small summaries in DB, store verbose logs/transcripts as artifacts with retention defaults.
+- Make “blame” and “replay” feel magical and fast.
+
+Conceptual objects (internal; keep UX simple):
+- User
+- Workspace (optional for v1; but include the concept for future scale)
+- ConnectedRepo (via GitHub App installation)
+- Run: what happened during an AI-assisted change attempt
+- Patch: diff + touched files (+ optional touched symbols)
+- Eval: verification result summary + artifact pointers
+- Bundle: what gets published to GitHub (run + eval + patch summary)
+- Artifact: logs, traces, benchmark outputs, uploaded to object storage
+
+Run (the primitive):
+A Run should include:
+- human goal string (e.g. “add caching to search”)
+- base SHA/ref
+- patch pointer
+- eval pointer(s)
+- minimal transcript pointer (optional)
+- reproducibility note (“replayable locally” vs “server-only”)
+Keep this simple in UX: “Goal / Diff / Tests / Results / Reproduce”.
+
+CLI behavior (make it delightful):
+- vibent run "…" should:
+  - (v1) record a run with a goal string and generate a patch via a stubbed “agent provider” interface (pluggable)
+  - show a compact summary: files changed, estimated tests affected, any obvious risks (API file touched, infra file touched)
+  - store run locally (in .vibent/)
+  - DO NOT require login
+- vibent verify should:
+  - run targeted checks (local by default; if connected, can optionally enqueue server verification)
+  - show a clean “what ran / what passed / what changed”
+- vibent publish should:
+  - require GitHub connection
+  - create/update PR and post “Vibent Evidence” check + one rolling PR comment
+- vibent blame path:line should:
+  - return commit info + associated run info if available; fallback to git blame
+- vibent replay <run_id> should:
+  - apply patch in a clean workspace and rerun verification steps (best-effort)
+- vibent agent serve should:
+  - run a localhost HTTP server exposing stable JSON endpoints for coding agents (see below)
+  - enforce budgets and scope constraints locally (but keep messaging friendly)
+
+Agent skills interface (local daemon):
+Expose these endpoints on localhost (OpenAPI required):
+- POST /v1/run/create  (goal, scope hints, base ref)
+- POST /v1/patch/propose (run_id, diff)
+- POST /v1/eval/plan (run_id, patch_id) -> suggested test commands
+- POST /v1/eval/run (plan_id) -> runs tests and returns eval_id
+- POST /v1/bundle/summarize (run_id) -> produces human-readable evidence
+- POST /v1/publish (run_id, pr_url or pr_number) -> triggers publish
+- GET  /v1/status (capabilities, repo connection, auth state)
+
+Keep schemas stable, clear, and simple. Return plain errors:
+- “Publishing requires GitHub connection.”
+- “This patch edits files outside the requested scope.”
+
+Backend + GitHub integration:
+- Use GitHub App for repo access + webhooks; use OAuth for user login.
+- Minimal required GitHub permissions: checks, pull requests, contents read (write only if needed for branches), metadata, actions read (if needed).
+- Webhooks: handle PR events and push events to update evidence association.
+- Publishing:
+  - GitHub Check “Vibent Evidence” on PR head SHA
+  - One rolling PR comment (find existing by hidden marker, edit it; else create)
+- Rate limit friendly: backoff, caching, avoid excessive API calls.
+
+Verification execution (safe, scalable, but low-ceremony):
+- Provide a basic affected-tests mechanism:
+  - default heuristic: if /frontend touched -> run frontend tests; if /backend touched -> backend tests; else run unit tests
+  - allow repo config .vibent/testmap.yaml to map globs to commands
+- Server verification worker should:
+  - clone repo at specific SHA using GitHub App token
+  - run commands in a locked-down container (no privileged mode)
+  - capture logs, redact secrets, upload to GCS
+  - write Eval summary to DB
+  - update GitHub Check and PR comment
+
+Secrets & redaction:
+- Implement simple secret redaction in logs/artifacts (regex patterns for tokens/keys + configurable denylist).
+- Never store GitHub tokens in plaintext; encrypt at rest.
+- Default retention:
+  - store summaries indefinitely
+  - store artifacts 14 days
+  - store artifacts for published bundles 90 days (configurable)
+- Provide “pin” for bundles (keep artifacts longer) but keep UI minimal.
+
+Observability:
+- structured logs with request IDs
+- basic metrics: runs created, publishes, verification duration, webhook latency, artifact bytes
+
+Tech stack (choose pragmatic defaults):
+- Frontend: Next.js (TypeScript)
+- API: TypeScript (Fastify or NestJS) OR Python FastAPI (choose ONE and be consistent)
+- DB: Postgres
+- Queue: Pub/Sub
+- Workers: Cloud Run job/worker service
+- Storage: GCS
+- IaC: Terraform
+- Local dev: docker-compose
+
+Monorepo layout:
+- /apps/web
+- /apps/api
+- /apps/worker
+- /apps/cli
+- /packages/shared (schemas/types/OpenAPI clients)
+- /infra/terraform
+- /docs
+
+Website UX (developer-friendly):
+- Landing page: what vibent is, minimal copy, clear CTA
+- Sign in with GitHub
+- “Connect repos” page (GitHub App install + select repos)
+- “Runs” page: list recent runs with status chips (Draft / Verified / Published)
+- Run detail: goal, diff preview, tests run, results, reproduce command
+- Publish flow: paste PR URL or select PR, then “Publish Evidence”
+- Settings (minimal): connected repos, artifact retention, personal tokens, logout
+Avoid enterprise words. Keep pages sparse.
+
+CI:
+- Lint, test, build for all apps
+- Optional: preview deploy for web
+
+GCP deployment requirements:
+- Terraform to deploy:
+  - Cloud Run services: web, api, worker
+  - Cloud SQL Postgres
+  - Pub/Sub topics/subscriptions
+  - GCS bucket for artifacts
+  - Secret Manager secrets
+  - Cloud Build triggers
+  - Cloud Scheduler job to run cleanup/retention (optional)
+- Provide clear README:
+  - local dev setup
+  - GitHub App creation steps + webhook URL + OAuth callback URLs
+  - required env vars
+  - deploy steps to GCP
+
+Quality bar:
+- End-to-end happy path should work:
+  1) install CLI
+  2) vibent run -> local run stored
+  3) vibent verify -> local tests run
+  4) login + connect GitHub
+  5) vibent publish -> evidence appears as check + rolling PR comment
+- Include tests for:
+  - run manifest creation + hashing
+  - redaction
+  - GitHub publishing (mocked)
+  - webhook signature validation
+- Include OpenAPI specs for API and agent daemon.
+- Include seed data and mocks so the system runs locally without GitHub configured.
+
+Now generate the complete monorepo with all code, configuration, Terraform, docs, and tests.
+Do not omit files. Provide everything needed to run locally and deploy to GCP.
