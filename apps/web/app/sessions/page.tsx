@@ -1,5 +1,7 @@
 import { fetchJsonNoThrow, resolveApiBaseUrl } from "../../lib/api";
 
+export const dynamic = "force-dynamic";
+
 interface SessionItem {
   id: string;
   title: string;

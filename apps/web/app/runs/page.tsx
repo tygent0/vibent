@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { fetchJsonNoThrow, resolveApiBaseUrl } from "../../lib/api";
 
+export const dynamic = "force-dynamic";
+
 interface Run {
   id: string;
   goal: string;

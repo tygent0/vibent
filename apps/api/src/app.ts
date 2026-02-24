@@ -81,6 +81,28 @@ function resolveCallbackUrl(input: string | undefined, webUrl: string): string |
   }
 }
 
+function resolveApiBaseUrlFromRequest(request: { headers: Record<string, unknown> }): string | null {
+  const forwardedProto = request.headers["x-forwarded-proto"];
+  const forwardedHost = request.headers["x-forwarded-host"];
+  const host = request.headers.host;
+
+  const proto = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
+  const hostRaw = Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost;
+  const fallbackHost = Array.isArray(host) ? host[0] : host;
+  const resolvedHost = String(hostRaw ?? fallbackHost ?? "").trim();
+  const resolvedProto = String(proto ?? "https").trim();
+  if (!resolvedHost) return null;
+  return `${resolvedProto}://${resolvedHost}`;
+}
+
+function withOAuthResult(returnTo: string, params: Record<string, string>): string {
+  const next = new URL(returnTo);
+  for (const [key, value] of Object.entries(params)) {
+    next.searchParams.set(key, value);
+  }
+  return next.toString();
+}
+
 function tokenize(input: string): string[] {
   return input
     .toLowerCase()
@@ -477,13 +499,20 @@ export function createApp(): FastifyInstance {
 
   app.get("/v1/auth/github/start", async (request, reply) => {
     const query = request.query as { returnTo?: string };
-    const redirectUri = resolveCallbackUrl(query.returnTo, config.webUrl);
-    if (!redirectUri) {
+    const returnTo = resolveCallbackUrl(query.returnTo, config.webUrl);
+    if (!returnTo) {
       reply.code(400);
       return { error: "Invalid returnTo URL. It must match VIBENT_WEB_URL origin." };
     }
+    const apiBaseUrl = resolveApiBaseUrlFromRequest(request);
+    if (!apiBaseUrl) {
+      reply.code(400);
+      return { error: "Could not resolve API host for OAuth callback." };
+    }
+    const redirectUri = `${apiBaseUrl}/v1/auth/github/callback`;
+
     if (!oauthConfigured) {
-      const redirect = new URL(redirectUri);
+      const redirect = new URL(returnTo);
       redirect.searchParams.set("error", "oauth_not_configured");
       redirect.searchParams.set(
         "error_description",
@@ -495,7 +524,7 @@ export function createApp(): FastifyInstance {
 
     const state = createOAuthState();
     const oauthStateCookie = encodeSignedObject<OAuthStatePayload>(
-      { state, redirectUri, createdAt: new Date().toISOString() },
+      { state, returnTo, oauthRedirectUri: redirectUri, createdAt: new Date().toISOString() },
       config.sessionSecret
     );
     reply.header(
@@ -520,31 +549,78 @@ export function createApp(): FastifyInstance {
   });
 
   app.get("/v1/auth/github/callback", async (request, reply) => {
+    const fallbackReturnTo = new URL("/signin/callback", config.webUrl).toString();
     if (!oauthConfigured) {
-      reply.code(400);
-      return { error: "GitHub OAuth is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET." };
+      reply.redirect(
+        withOAuthResult(fallbackReturnTo, {
+          status: "error",
+          error: "oauth_not_configured",
+          error_description: "GitHub OAuth is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET."
+        })
+      );
+      return undefined;
     }
 
     const query = request.query as { code?: string; state?: string };
     if (!query.code || !query.state) {
-      reply.code(400);
-      return { error: "Missing code or state in callback query." };
+      reply.redirect(
+        withOAuthResult(fallbackReturnTo, {
+          status: "error",
+          error: "missing_code_or_state",
+          error_description: "Missing code or state in callback query."
+        })
+      );
+      return undefined;
     }
 
     const cookies = parseCookieHeader(request.headers.cookie);
-    const stateCookie = decodeSignedObject<OAuthStatePayload>(cookies[OAUTH_STATE_COOKIE], config.sessionSecret);
+    const stateCookie = decodeSignedObject<
+      OAuthStatePayload & { redirectUri?: string }
+    >(cookies[OAUTH_STATE_COOKIE], config.sessionSecret);
+    const returnTo = resolveCallbackUrl(stateCookie?.returnTo ?? stateCookie?.redirectUri, config.webUrl) ?? fallbackReturnTo;
     if (!stateCookie) {
-      reply.code(400);
-      return { error: "Missing or invalid OAuth state cookie." };
+      reply.redirect(
+        withOAuthResult(returnTo, {
+          status: "error",
+          error: "missing_oauth_state",
+          error_description: "Missing or invalid OAuth state cookie."
+        })
+      );
+      return undefined;
     }
     if (stateCookie.state !== query.state) {
-      reply.code(400);
-      return { error: "OAuth state mismatch." };
+      reply.redirect(
+        withOAuthResult(returnTo, {
+          status: "error",
+          error: "oauth_state_mismatch",
+          error_description: "OAuth state mismatch."
+        })
+      );
+      return undefined;
     }
     const ageMs = Date.now() - new Date(stateCookie.createdAt).getTime();
     if (!Number.isFinite(ageMs) || ageMs > OAUTH_STATE_MAX_AGE_SECONDS * 1000) {
-      reply.code(400);
-      return { error: "OAuth state expired. Start sign-in again." };
+      reply.redirect(
+        withOAuthResult(returnTo, {
+          status: "error",
+          error: "oauth_state_expired",
+          error_description: "OAuth state expired. Start sign-in again."
+        })
+      );
+      return undefined;
+    }
+
+    const apiBaseUrl = resolveApiBaseUrlFromRequest(request);
+    const oauthRedirectUri = stateCookie.oauthRedirectUri ?? (apiBaseUrl ? `${apiBaseUrl}/v1/auth/github/callback` : "");
+    if (!oauthRedirectUri) {
+      reply.redirect(
+        withOAuthResult(returnTo, {
+          status: "error",
+          error: "oauth_callback_resolution_failed",
+          error_description: "Could not resolve OAuth callback URL for token exchange."
+        })
+      );
+      return undefined;
     }
 
     const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
@@ -558,19 +634,31 @@ export function createApp(): FastifyInstance {
         client_id: config.githubClientId,
         client_secret: config.githubClientSecret,
         code: query.code,
-        redirect_uri: stateCookie.redirectUri,
+        redirect_uri: oauthRedirectUri,
         state: query.state
       })
     });
     if (!tokenRes.ok) {
-      reply.code(502);
-      return { error: "Failed to exchange GitHub OAuth code." };
+      reply.redirect(
+        withOAuthResult(returnTo, {
+          status: "error",
+          error: "oauth_exchange_failed",
+          error_description: "Failed to exchange GitHub OAuth code."
+        })
+      );
+      return undefined;
     }
 
     const token = (await tokenRes.json()) as GithubTokenResponse;
     if (!token.access_token || token.error) {
-      reply.code(400);
-      return { error: token.error_description ?? token.error ?? "GitHub OAuth exchange failed." };
+      reply.redirect(
+        withOAuthResult(returnTo, {
+          status: "error",
+          error: token.error ?? "oauth_exchange_failed",
+          error_description: token.error_description ?? token.error ?? "GitHub OAuth exchange failed."
+        })
+      );
+      return undefined;
     }
 
     const userRes = await fetch("https://api.github.com/user", {
@@ -582,14 +670,26 @@ export function createApp(): FastifyInstance {
       }
     });
     if (!userRes.ok) {
-      reply.code(502);
-      return { error: "Failed to load GitHub user profile." };
+      reply.redirect(
+        withOAuthResult(returnTo, {
+          status: "error",
+          error: "oauth_profile_load_failed",
+          error_description: "Failed to load GitHub user profile."
+        })
+      );
+      return undefined;
     }
 
     const user = (await userRes.json()) as GithubUserResponse;
     if (!user.id || !user.login) {
-      reply.code(502);
-      return { error: "GitHub user profile was incomplete." };
+      reply.redirect(
+        withOAuthResult(returnTo, {
+          status: "error",
+          error: "oauth_profile_incomplete",
+          error_description: "GitHub user profile was incomplete."
+        })
+      );
+      return undefined;
     }
 
     const now = Date.now();
@@ -616,17 +716,13 @@ export function createApp(): FastifyInstance {
       }),
       clearCookie(OAUTH_STATE_COOKIE)
     ]);
-
-    return {
-      ok: true,
-      connected: true,
-      user: {
-        id: user.id,
-        login: user.login,
-        name: user.name ?? null,
-        avatarUrl: user.avatar_url ?? null
-      }
-    };
+    reply.redirect(
+      withOAuthResult(returnTo, {
+        status: "ok",
+        login: user.login
+      })
+    );
+    return undefined;
   });
 
   app.post("/v1/auth/logout", async (_request, reply) => {

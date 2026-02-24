@@ -1,69 +1,57 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
-const API = process.env.NEXT_PUBLIC_VIBENT_API_URL ?? "http://localhost:8080";
-
-interface CallbackSuccess {
-  ok: boolean;
-  connected: boolean;
-  user: {
-    id: number;
-    login: string;
-    name: string | null;
-    avatarUrl: string | null;
-  };
-}
-
-interface CallbackError {
-  error: string;
-}
-
-export default function SignInCallbackPage() {
+function SignInCallbackInner() {
   const router = useRouter();
   const params = useSearchParams();
   const [message, setMessage] = useState<string>("Finishing GitHub sign-in...");
 
-  const code = params.get("code");
-  const state = params.get("state");
+  const status = params.get("status");
+  const login = params.get("login");
   const oauthError = params.get("error_description") ?? params.get("error");
-
-  const callbackUrl = useMemo(() => {
-    const search = new URLSearchParams();
-    if (code) search.set("code", code);
-    if (state) search.set("state", state);
-    return `${API}/v1/auth/github/callback?${search.toString()}`;
-  }, [code, state]);
+  const decodedError = useMemo(() => {
+    if (!oauthError) return null;
+    try {
+      return decodeURIComponent(oauthError);
+    } catch {
+      return oauthError;
+    }
+  }, [oauthError]);
 
   useEffect(() => {
-    if (oauthError) {
-      setMessage(`GitHub sign-in failed: ${oauthError}`);
+    if (decodedError) {
+      setMessage(`GitHub sign-in failed: ${decodedError}`);
       return;
     }
-    if (!code || !state) {
-      setMessage("Missing OAuth callback parameters.");
+    if (status !== "ok") {
+      setMessage("Sign-in did not complete.");
       return;
     }
-
-    const run = async () => {
-      const response = await fetch(callbackUrl, { credentials: "include" });
-      const data = (await response.json()) as CallbackSuccess | CallbackError;
-      if (!response.ok || "error" in data) {
-        setMessage(`Sign-in failed: ${"error" in data ? data.error : "unknown error"}`);
-        return;
-      }
-      setMessage(`Signed in as @${data.user.login}. Redirecting...`);
-      window.setTimeout(() => router.replace("/signin"), 700);
-    };
-
-    void run();
-  }, [callbackUrl, code, oauthError, router, state]);
+    setMessage(`Signed in as @${login ?? "user"}. Redirecting...`);
+    window.setTimeout(() => router.replace("/signin"), 700);
+  }, [decodedError, login, router, status]);
 
   return (
     <section>
       <h1>Sign in callback</h1>
       <p>{message}</p>
     </section>
+  );
+}
+
+export default function SignInCallbackPage() {
+  return (
+    <Suspense
+      fallback={
+        <section>
+          <h1>Sign in callback</h1>
+          <p>Finishing GitHub sign-in...</p>
+        </section>
+      }
+    >
+      <SignInCallbackInner />
+    </Suspense>
   );
 }

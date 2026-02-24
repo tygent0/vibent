@@ -15,7 +15,8 @@ export interface AuthSessionPayload {
 
 export interface OAuthStatePayload {
   state: string;
-  redirectUri: string;
+  returnTo: string;
+  oauthRedirectUri: string;
   createdAt: string;
 }
 

@@ -24,8 +24,8 @@ Subscribe to events:
 
 Configure callback URL:
 
-- Local: `http://localhost:3000/signin/callback`
-- Prod: `https://<web-domain>/signin/callback`
+- Local: `http://localhost:8080/v1/auth/github/callback`
+- Prod: `https://<api-domain>/v1/auth/github/callback`
 
 ## Required env vars
 

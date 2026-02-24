@@ -92,3 +92,10 @@ cd infra/terraform
 terraform init
 terraform apply
 ```
+
+Cloud Run deploy/redeploy script:
+
+```bash
+scripts/predeploy-cloud-run.sh
+scripts/deploy-cloud-run.sh --project YOUR_GCP_PROJECT
+```
