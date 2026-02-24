@@ -1,5 +1,7 @@
 # Getting Started
 
+Recommended: run vibent locally from https://github.com/tygent0/vibent
+
 ## Prerequisites
 
 - Node.js 22+

@@ -24,6 +24,11 @@ export default function HomePage() {
       <p>
         <Link href="/signin">Sign in with GitHub</Link>
       </p>
+      <p>
+        <a href="https://github.com/tygent0/vibent" target="_blank" rel="noreferrer">
+          Use vibent locally (recommended)
+        </a>
+      </p>
     </section>
   );
 }

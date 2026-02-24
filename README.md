@@ -2,6 +2,9 @@
 
 vibent is developer-joy-first evidence for AI-assisted coding.
 
+Prefer local usage for the fastest workflow and full CLI/API access:
+https://github.com/tygent0/vibent
+
 ## Command surface
 
 - `vibent run "goal"`

@@ -31,12 +31,55 @@ import {
 } from "@vibent/shared";
 import { loadConfig } from "./config.js";
 import { createId } from "./lib/ids.js";
+import {
+  AuthSessionPayload,
+  OAuthStatePayload,
+  clearCookie,
+  createOAuthState,
+  decodeSignedObject,
+  encodeSignedObject,
+  parseCookieHeader,
+  serializeCookie
+} from "./lib/auth.js";
 import { publishEvidence } from "./lib/github.js";
 import { createMockGithubClient } from "./lib/mockGithub.js";
 import { hashRunManifest } from "./lib/runManifest.js";
 import { FileStore } from "./lib/store.js";
 import { suggestCommands } from "./lib/testPlanner.js";
 import { validateGithubSignature } from "./lib/webhook.js";
+
+interface GithubTokenResponse {
+  access_token?: string;
+  token_type?: string;
+  scope?: string;
+  error?: string;
+  error_description?: string;
+}
+
+interface GithubUserResponse {
+  id: number;
+  login: string;
+  name: string | null;
+  avatar_url: string | null;
+}
+
+const OAUTH_STATE_COOKIE = "vibent_oauth_state";
+const SESSION_COOKIE = "vibent_session";
+const OAUTH_STATE_MAX_AGE_SECONDS = 10 * 60;
+const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+
+function resolveCallbackUrl(input: string | undefined, webUrl: string): string | null {
+  const fallback = new URL("/signin/callback", webUrl).toString();
+  const raw = input ?? fallback;
+  try {
+    const parsed = new URL(raw);
+    const allowed = new URL(webUrl);
+    if (parsed.origin !== allowed.origin) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
 
 function tokenize(input: string): string[] {
   return input
@@ -374,10 +417,11 @@ export function createApp(): FastifyInstance {
   const config = loadConfig();
   const app = Fastify({ logger: true, requestIdHeader: "x-request-id" });
   const store = new FileStore(config.dataDir);
+  const oauthConfigured = config.githubClientId.length > 0 && config.githubClientSecret.length > 0;
 
   fs.mkdirSync(config.artifactsDir, { recursive: true });
 
-  app.register(cors, { origin: true });
+  app.register(cors, { origin: true, credentials: true });
 
   app.get("/health", async () => ({ status: "ok", service: "vibent-api" }));
 
@@ -412,6 +456,183 @@ export function createApp(): FastifyInstance {
       repoConnected: store.isRepoConnected(),
       authState: store.isRepoConnected() ? "connected" : "disconnected"
     });
+  });
+
+  app.get("/v1/auth/session", async (request, reply) => {
+    const cookies = parseCookieHeader(request.headers.cookie);
+    const rawSession = cookies[SESSION_COOKIE];
+    const session = decodeSignedObject<AuthSessionPayload>(rawSession, config.sessionSecret);
+    const expiresAt = session ? new Date(session.expiresAt).getTime() : 0;
+    const validSession = session && Number.isFinite(expiresAt) && expiresAt > Date.now() ? session : null;
+
+    if (!validSession && rawSession) {
+      reply.header("set-cookie", clearCookie(SESSION_COOKIE));
+    }
+
+    return {
+      connected: store.isRepoConnected() || Boolean(validSession),
+      user: validSession?.user ?? null
+    };
+  });
+
+  app.get("/v1/auth/github/start", async (request, reply) => {
+    const query = request.query as { returnTo?: string };
+    const redirectUri = resolveCallbackUrl(query.returnTo, config.webUrl);
+    if (!redirectUri) {
+      reply.code(400);
+      return { error: "Invalid returnTo URL. It must match VIBENT_WEB_URL origin." };
+    }
+    if (!oauthConfigured) {
+      const redirect = new URL(redirectUri);
+      redirect.searchParams.set("error", "oauth_not_configured");
+      redirect.searchParams.set(
+        "error_description",
+        "GitHub OAuth is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET."
+      );
+      reply.redirect(redirect.toString());
+      return undefined;
+    }
+
+    const state = createOAuthState();
+    const oauthStateCookie = encodeSignedObject<OAuthStatePayload>(
+      { state, redirectUri, createdAt: new Date().toISOString() },
+      config.sessionSecret
+    );
+    reply.header(
+      "set-cookie",
+      serializeCookie(OAUTH_STATE_COOKIE, oauthStateCookie, {
+        path: "/",
+        httpOnly: true,
+        sameSite: "Lax",
+        maxAge: OAUTH_STATE_MAX_AGE_SECONDS
+      })
+    );
+
+    const params = new URLSearchParams({
+      client_id: config.githubClientId,
+      redirect_uri: redirectUri,
+      scope: config.oauthScopes,
+      state,
+      allow_signup: "true"
+    });
+    reply.redirect(`https://github.com/login/oauth/authorize?${params.toString()}`);
+    return undefined;
+  });
+
+  app.get("/v1/auth/github/callback", async (request, reply) => {
+    if (!oauthConfigured) {
+      reply.code(400);
+      return { error: "GitHub OAuth is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET." };
+    }
+
+    const query = request.query as { code?: string; state?: string };
+    if (!query.code || !query.state) {
+      reply.code(400);
+      return { error: "Missing code or state in callback query." };
+    }
+
+    const cookies = parseCookieHeader(request.headers.cookie);
+    const stateCookie = decodeSignedObject<OAuthStatePayload>(cookies[OAUTH_STATE_COOKIE], config.sessionSecret);
+    if (!stateCookie) {
+      reply.code(400);
+      return { error: "Missing or invalid OAuth state cookie." };
+    }
+    if (stateCookie.state !== query.state) {
+      reply.code(400);
+      return { error: "OAuth state mismatch." };
+    }
+    const ageMs = Date.now() - new Date(stateCookie.createdAt).getTime();
+    if (!Number.isFinite(ageMs) || ageMs > OAUTH_STATE_MAX_AGE_SECONDS * 1000) {
+      reply.code(400);
+      return { error: "OAuth state expired. Start sign-in again." };
+    }
+
+    const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        "user-agent": "vibent-api"
+      },
+      body: JSON.stringify({
+        client_id: config.githubClientId,
+        client_secret: config.githubClientSecret,
+        code: query.code,
+        redirect_uri: stateCookie.redirectUri,
+        state: query.state
+      })
+    });
+    if (!tokenRes.ok) {
+      reply.code(502);
+      return { error: "Failed to exchange GitHub OAuth code." };
+    }
+
+    const token = (await tokenRes.json()) as GithubTokenResponse;
+    if (!token.access_token || token.error) {
+      reply.code(400);
+      return { error: token.error_description ?? token.error ?? "GitHub OAuth exchange failed." };
+    }
+
+    const userRes = await fetch("https://api.github.com/user", {
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${token.access_token}`,
+        "user-agent": "vibent-api",
+        "x-github-api-version": "2022-11-28"
+      }
+    });
+    if (!userRes.ok) {
+      reply.code(502);
+      return { error: "Failed to load GitHub user profile." };
+    }
+
+    const user = (await userRes.json()) as GithubUserResponse;
+    if (!user.id || !user.login) {
+      reply.code(502);
+      return { error: "GitHub user profile was incomplete." };
+    }
+
+    const now = Date.now();
+    const session = encodeSignedObject<AuthSessionPayload>(
+      {
+        user: {
+          id: user.id,
+          login: user.login,
+          name: user.name ?? null,
+          avatarUrl: user.avatar_url ?? null
+        },
+        connectedAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + SESSION_MAX_AGE_SECONDS * 1000).toISOString()
+      },
+      config.sessionSecret
+    );
+    store.setRepoConnection(true);
+    reply.header("set-cookie", [
+      serializeCookie(SESSION_COOKIE, session, {
+        path: "/",
+        httpOnly: true,
+        sameSite: "Lax",
+        maxAge: SESSION_MAX_AGE_SECONDS
+      }),
+      clearCookie(OAUTH_STATE_COOKIE)
+    ]);
+
+    return {
+      ok: true,
+      connected: true,
+      user: {
+        id: user.id,
+        login: user.login,
+        name: user.name ?? null,
+        avatarUrl: user.avatar_url ?? null
+      }
+    };
+  });
+
+  app.post("/v1/auth/logout", async (_request, reply) => {
+    store.setRepoConnection(false);
+    reply.header("set-cookie", [clearCookie(SESSION_COOKIE), clearCookie(OAUTH_STATE_COOKIE)]);
+    return { ok: true };
   });
 
   app.post("/v1/mock/connect", async (request) => {
