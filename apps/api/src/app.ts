@@ -63,6 +63,23 @@ interface GithubUserResponse {
   avatar_url: string | null;
 }
 
+interface GithubRepoResponse {
+  id: number;
+  name: string;
+  full_name: string;
+  private: boolean;
+  html_url: string;
+  default_branch: string;
+  owner: {
+    login: string;
+  };
+  permissions?: {
+    admin?: boolean;
+    push?: boolean;
+    pull?: boolean;
+  };
+}
+
 const OAUTH_STATE_COOKIE = "vibent_oauth_state";
 const SESSION_COOKIE = "vibent_session";
 const OAUTH_STATE_MAX_AGE_SECONDS = 10 * 60;
@@ -93,6 +110,24 @@ function resolveApiBaseUrlFromRequest(request: { headers: Record<string, unknown
   const resolvedProto = String(proto ?? "https").trim();
   if (!resolvedHost) return null;
   return `${resolvedProto}://${resolvedHost}`;
+}
+
+function resolveCookiePolicy(apiBaseUrl: string | null, webUrl: string): { sameSite: "Lax" | "None"; secure: boolean } {
+  if (!apiBaseUrl) {
+    return { sameSite: "Lax", secure: false };
+  }
+  try {
+    const api = new URL(apiBaseUrl);
+    const web = new URL(webUrl);
+    const crossOrigin = api.origin !== web.origin;
+    const secure = api.protocol === "https:";
+    if (crossOrigin && secure) {
+      return { sameSite: "None", secure: true };
+    }
+  } catch {
+    // Fall through to local-safe defaults.
+  }
+  return { sameSite: "Lax", secure: false };
 }
 
 function withOAuthResult(returnTo: string, params: Record<string, string>): string {
@@ -486,14 +521,16 @@ export function createApp(): FastifyInstance {
     const session = decodeSignedObject<AuthSessionPayload>(rawSession, config.sessionSecret);
     const expiresAt = session ? new Date(session.expiresAt).getTime() : 0;
     const validSession = session && Number.isFinite(expiresAt) && expiresAt > Date.now() ? session : null;
+    const cookiePolicy = resolveCookiePolicy(resolveApiBaseUrlFromRequest(request), config.webUrl);
 
     if (!validSession && rawSession) {
-      reply.header("set-cookie", clearCookie(SESSION_COOKIE));
+      reply.header("set-cookie", clearCookie(SESSION_COOKIE, cookiePolicy));
     }
 
     return {
       connected: store.isRepoConnected() || Boolean(validSession),
-      user: validSession?.user ?? null
+      user: validSession?.user ?? null,
+      selectedRepos: store.listSelectedRepos()
     };
   });
 
@@ -509,6 +546,7 @@ export function createApp(): FastifyInstance {
       reply.code(400);
       return { error: "Could not resolve API host for OAuth callback." };
     }
+    const cookiePolicy = resolveCookiePolicy(apiBaseUrl, config.webUrl);
     const redirectUri = `${apiBaseUrl}/v1/auth/github/callback`;
 
     if (!oauthConfigured) {
@@ -532,7 +570,8 @@ export function createApp(): FastifyInstance {
       serializeCookie(OAUTH_STATE_COOKIE, oauthStateCookie, {
         path: "/",
         httpOnly: true,
-        sameSite: "Lax",
+        sameSite: cookiePolicy.sameSite,
+        secure: cookiePolicy.secure,
         maxAge: OAUTH_STATE_MAX_AGE_SECONDS
       })
     );
@@ -611,6 +650,7 @@ export function createApp(): FastifyInstance {
     }
 
     const apiBaseUrl = resolveApiBaseUrlFromRequest(request);
+    const cookiePolicy = resolveCookiePolicy(apiBaseUrl, config.webUrl);
     const oauthRedirectUri = stateCookie.oauthRedirectUri ?? (apiBaseUrl ? `${apiBaseUrl}/v1/auth/github/callback` : "");
     if (!oauthRedirectUri) {
       reply.redirect(
@@ -702,7 +742,8 @@ export function createApp(): FastifyInstance {
           avatarUrl: user.avatar_url ?? null
         },
         connectedAt: new Date(now).toISOString(),
-        expiresAt: new Date(now + SESSION_MAX_AGE_SECONDS * 1000).toISOString()
+        expiresAt: new Date(now + SESSION_MAX_AGE_SECONDS * 1000).toISOString(),
+        githubAccessToken: token.access_token
       },
       config.sessionSecret
     );
@@ -711,10 +752,11 @@ export function createApp(): FastifyInstance {
       serializeCookie(SESSION_COOKIE, session, {
         path: "/",
         httpOnly: true,
-        sameSite: "Lax",
+        sameSite: cookiePolicy.sameSite,
+        secure: cookiePolicy.secure,
         maxAge: SESSION_MAX_AGE_SECONDS
       }),
-      clearCookie(OAUTH_STATE_COOKIE)
+      clearCookie(OAUTH_STATE_COOKIE, cookiePolicy)
     ]);
     reply.redirect(
       withOAuthResult(returnTo, {
@@ -725,15 +767,129 @@ export function createApp(): FastifyInstance {
     return undefined;
   });
 
-  app.post("/v1/auth/logout", async (_request, reply) => {
+  app.post("/v1/auth/logout", async (request, reply) => {
     store.setRepoConnection(false);
-    reply.header("set-cookie", [clearCookie(SESSION_COOKIE), clearCookie(OAUTH_STATE_COOKIE)]);
+    store.setSelectedRepos([]);
+    const cookiePolicy = resolveCookiePolicy(resolveApiBaseUrlFromRequest(request), config.webUrl);
+    reply.header("set-cookie", [clearCookie(SESSION_COOKIE, cookiePolicy), clearCookie(OAUTH_STATE_COOKIE, cookiePolicy)]);
     return { ok: true };
+  });
+
+  app.get("/v1/auth/github/repos", async (request, reply) => {
+    const cookies = parseCookieHeader(request.headers.cookie);
+    const rawSession = cookies[SESSION_COOKIE];
+    const session = decodeSignedObject<AuthSessionPayload>(rawSession, config.sessionSecret);
+    const expiresAt = session ? new Date(session.expiresAt).getTime() : 0;
+    const validSession = session && Number.isFinite(expiresAt) && expiresAt > Date.now() ? session : null;
+    const cookiePolicy = resolveCookiePolicy(resolveApiBaseUrlFromRequest(request), config.webUrl);
+
+    if (!validSession) {
+      if (rawSession) {
+        reply.header("set-cookie", clearCookie(SESSION_COOKIE, cookiePolicy));
+      }
+      reply.code(401);
+      return { error: "Not signed in." };
+    }
+
+    if (!validSession.githubAccessToken) {
+      reply.code(401);
+      return { error: "Session is missing GitHub access. Sign in again." };
+    }
+
+    const selectedRepos = new Set(store.listSelectedRepos());
+    const repos: Array<{
+      id: number;
+      name: string;
+      fullName: string;
+      private: boolean;
+      owner: string;
+      defaultBranch: string;
+      htmlUrl: string;
+      selected: boolean;
+      permissions: {
+        admin: boolean;
+        push: boolean;
+        pull: boolean;
+      };
+    }> = [];
+
+    for (let page = 1; page <= 10; page += 1) {
+      const repoRes = await fetch(
+        `https://api.github.com/user/repos?per_page=100&page=${page}&affiliation=owner,collaborator,organization_member&sort=full_name`,
+        {
+          headers: {
+            accept: "application/vnd.github+json",
+            authorization: `Bearer ${validSession.githubAccessToken}`,
+            "user-agent": "vibent-api",
+            "x-github-api-version": "2022-11-28"
+          }
+        }
+      );
+
+      if (!repoRes.ok) {
+        reply.code(502);
+        return { error: "Failed to load repositories from GitHub." };
+      }
+
+      const batch = (await repoRes.json()) as GithubRepoResponse[];
+      repos.push(
+        ...batch.map((repo) => ({
+          id: repo.id,
+          name: repo.name,
+          fullName: repo.full_name,
+          private: repo.private,
+          owner: repo.owner.login,
+          defaultBranch: repo.default_branch,
+          htmlUrl: repo.html_url,
+          selected: selectedRepos.has(repo.full_name),
+          permissions: {
+            admin: Boolean(repo.permissions?.admin),
+            push: Boolean(repo.permissions?.push),
+            pull: Boolean(repo.permissions?.pull ?? true)
+          }
+        }))
+      );
+
+      if (batch.length < 100) {
+        break;
+      }
+    }
+
+    return { repos };
+  });
+
+  app.post("/v1/auth/github/repos/select", async (request, reply) => {
+    const cookies = parseCookieHeader(request.headers.cookie);
+    const rawSession = cookies[SESSION_COOKIE];
+    const session = decodeSignedObject<AuthSessionPayload>(rawSession, config.sessionSecret);
+    const expiresAt = session ? new Date(session.expiresAt).getTime() : 0;
+    const validSession = session && Number.isFinite(expiresAt) && expiresAt > Date.now() ? session : null;
+    if (!validSession) {
+      reply.code(401);
+      return { error: "Not signed in." };
+    }
+
+    const body = request.body as { repos?: string[] };
+    const repos = [...new Set((body.repos ?? []).map((repo) => repo.trim()).filter(Boolean))];
+    if (repos.length === 0) {
+      reply.code(400);
+      return { error: "Select at least one repository." };
+    }
+    if (repos.length > 100) {
+      reply.code(400);
+      return { error: "Too many repositories selected. Limit is 100." };
+    }
+
+    const selectedRepos = store.setSelectedRepos(repos);
+    return { ok: true, selectedRepos };
   });
 
   app.post("/v1/mock/connect", async (request) => {
     const body = request.body as { connected?: boolean };
     store.setRepoConnection(body.connected ?? true);
+    if ((body.connected ?? true) === false) {
+      store.setSelectedRepos([]);
+    }
     return { ok: true, connected: store.isRepoConnected() };
   });
 

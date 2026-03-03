@@ -11,6 +11,7 @@ export interface AuthSessionPayload {
   user: AuthSessionUser;
   connectedAt: string;
   expiresAt: string;
+  githubAccessToken?: string;
 }
 
 export interface OAuthStatePayload {
@@ -79,8 +80,14 @@ export function serializeCookie(name: string, value: string, options: CookieOpti
   return parts.join("; ");
 }
 
-export function clearCookie(name: string): string {
-  return serializeCookie(name, "", { path: "/", httpOnly: true, sameSite: "Lax", maxAge: 0 });
+export function clearCookie(name: string, options: CookieOptions = {}): string {
+  return serializeCookie(name, "", {
+    path: "/",
+    httpOnly: true,
+    sameSite: options.sameSite ?? "Lax",
+    secure: options.secure,
+    maxAge: 0
+  });
 }
 
 export function createOAuthState(): string {

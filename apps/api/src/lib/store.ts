@@ -30,6 +30,7 @@ interface StoreState {
   releases: Release[];
   productionSignals: ProductionSignal[];
   repoConnected: boolean;
+  selectedRepos: string[];
   sessions: Session[];
   sessionEvents: SessionEvent[];
   highlights: Highlight[];
@@ -46,6 +47,7 @@ const INITIAL_STATE: StoreState = {
   releases: [],
   productionSignals: [],
   repoConnected: false,
+  selectedRepos: [],
   sessions: [],
   sessionEvents: [],
   highlights: [],
@@ -79,6 +81,7 @@ export class FileStore {
       releases: raw.releases ?? [],
       productionSignals: raw.productionSignals ?? [],
       repoConnected: raw.repoConnected ?? false,
+      selectedRepos: raw.selectedRepos ?? [],
       sessions: raw.sessions ?? [],
       sessionEvents: raw.sessionEvents ?? [],
       highlights: raw.highlights ?? [],
@@ -231,6 +234,17 @@ export class FileStore {
 
   isRepoConnected(): boolean {
     return this.load().repoConnected;
+  }
+
+  setSelectedRepos(repos: string[]): string[] {
+    const state = this.load();
+    state.selectedRepos = unique(repos.map((repo) => repo.trim()).filter(Boolean));
+    this.save(state);
+    return state.selectedRepos;
+  }
+
+  listSelectedRepos(): string[] {
+    return this.load().selectedRepos;
   }
 
   listSessions(): Session[] {
